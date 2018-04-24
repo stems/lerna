@@ -45,7 +45,7 @@ export default class GitUtilities {
     log.silly("addFile", file);
     const relativePath = path.relative(opts.cwd, path.resolve(opts.cwd, file));
     const portablePath = slash(relativePath);
-    ChildProcessUtilities.execSync("git", ["add", portablePath], opts);
+    ChildProcessUtilities.execSync("git", ["add", "--update", portablePath], opts);
   }
 
   static commit(message, opts) {

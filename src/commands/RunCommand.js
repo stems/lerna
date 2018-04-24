@@ -6,8 +6,9 @@ import output from "../utils/output";
 import PackageUtilities from "../PackageUtilities";
 
 export function handler(argv) {
-  new RunCommand([argv.script, ...argv.args], argv, argv._cwd).run()
-    .then(argv._onFinish, argv._onFinish);
+  // eslint-disable-next-line no-use-before-define
+  const cmd = new RunCommand([argv.script, ...argv.args], argv, argv._cwd);
+  return cmd.run().then(argv._onResolved, argv._onRejected);
 }
 
 export const command = "run <script> [args..]";
@@ -15,17 +16,31 @@ export const command = "run <script> [args..]";
 export const describe = "Run an npm script in each package that contains that script.";
 
 export const builder = {
-  "stream": {
+  stream: {
     group: "Command Options:",
     describe: "Stream output with lines prefixed by package.",
     type: "boolean",
     default: undefined,
   },
-  "parallel": {
+  // This option controls prefix for stream output so that it can be disabled to be friendly
+  // to tools like Visual Studio Code to highlight the raw results
+  prefix: {
+    group: "Command Options:",
+    describe: "Enable prefix for stream output",
+    type: "boolean",
+    default: undefined,
+  },
+  parallel: {
     group: "Command Options:",
     describe: "Run script in all packages with unlimited concurrency, streaming prefixed output",
     type: "boolean",
     default: undefined,
+  },
+  "npm-client": {
+    group: "Command Options:",
+    describe: "Executable used to run scripts (npm, yarn, pnpm, ...)",
+    type: "string",
+    requiresArg: true,
   },
 };
 
@@ -38,51 +53,61 @@ export default class RunCommand extends Command {
     return Object.assign({}, super.defaultOptions, {
       parallel: false,
       stream: false,
+      prefix: true,
     });
   }
 
   initialize(callback) {
-    this.script = this.input[0];
-    this.args = this.input.slice(1);
+    const [script, ...args] = this.input;
+    this.script = script;
+    this.args = args;
 
-    if (!this.script) {
+    if (!script) {
       callback(new Error("You must specify which npm script to run."));
       return;
     }
 
+    const { parallel, stream, npmClient } = this.options;
+    this.npmClient = npmClient || "npm";
+
     const { filteredPackages } = this;
 
-    if (this.script === "test" || this.script === "env") {
+    if (script === "env") {
       this.packagesWithScript = filteredPackages;
     } else {
-      this.packagesWithScript = filteredPackages
-        .filter((pkg) => pkg.scripts && pkg.scripts[this.script]);
+      this.packagesWithScript = filteredPackages.filter(pkg => pkg.scripts && pkg.scripts[script]);
     }
 
     if (!this.packagesWithScript.length) {
-      this.logger.warn(`No packages found with the npm script '${this.script}'`);
+      this.logger.warn(`No packages found with the npm script '${script}'`);
     }
 
-    if (this.options.parallel || this.options.stream) {
+    if (parallel || stream) {
       // don't interrupt streaming stdio
       this.logger.disableProgress();
     }
 
-    this.batchedPackages = this.toposort
-      ? PackageUtilities.topologicallyBatchPackages(this.packagesWithScript)
-      : [this.packagesWithScript];
+    try {
+      this.batchedPackages = this.toposort
+        ? PackageUtilities.topologicallyBatchPackages(this.packagesWithScript, {
+            rejectCycles: this.options.rejectCycles,
+          })
+        : [this.packagesWithScript];
+    } catch (e) {
+      return callback(e);
+    }
 
     callback(null, true);
   }
 
   execute(callback) {
-    const finish = (err) => {
+    const finish = err => {
       if (err) {
         callback(err);
       } else {
         if (this.packagesWithScript.length) {
           this.logger.success("run", `Ran npm script '${this.script}' in packages:`);
-          this.logger.success("", this.packagesWithScript.map((pkg) => `- ${pkg.name}`).join("\n"));
+          this.logger.success("", this.packagesWithScript.map(pkg => `- ${pkg.name}`).join("\n"));
         }
         callback(null, true);
       }
@@ -96,9 +121,14 @@ export default class RunCommand extends Command {
   }
 
   runScriptInPackagesBatched(callback) {
-    PackageUtilities.runParallelBatches(this.batchedPackages, (pkg) => (done) => {
-      this.runScriptInPackage(pkg, done);
-    }, this.concurrency, callback);
+    PackageUtilities.runParallelBatches(
+      this.batchedPackages,
+      pkg => done => {
+        this.runScriptInPackage(pkg, done);
+      },
+      this.concurrency,
+      callback
+    );
   }
 
   runScriptInPackage(pkg, callback) {
@@ -117,23 +147,43 @@ export default class RunCommand extends Command {
       [this.script].concat(this.args).join(" ")
     );
 
-    async.parallel(this.packagesWithScript.map((pkg) => (done) => {
-      this.runScriptInPackageStreaming(pkg, done);
-    }), callback);
+    async.parallel(
+      this.packagesWithScript.map(pkg => done => {
+        this.runScriptInPackageStreaming(pkg, done);
+      }),
+      callback
+    );
   }
 
   runScriptInPackageStreaming(pkg, callback) {
-    NpmUtilities.runScriptInPackageStreaming(this.script, this.args, pkg, callback);
+    NpmUtilities.runScriptInPackageStreaming(
+      this.script,
+      {
+        args: this.args,
+        pkg,
+        npmClient: this.npmClient,
+        prefix: this.options.prefix,
+      },
+      callback
+    );
   }
 
   runScriptInPackageCapturing(pkg, callback) {
-    NpmUtilities.runScriptInDir(this.script, this.args, pkg.location, (err, stdout) => {
-      if (err) {
-        this.logger.error(this.script, `Errored while running script in '${pkg.name}'`);
-      } else {
-        output(stdout);
+    NpmUtilities.runScriptInDir(
+      this.script,
+      {
+        args: this.args,
+        directory: pkg.location,
+        npmClient: this.npmClient,
+      },
+      (err, stdout) => {
+        if (err) {
+          this.logger.error(this.script, `Errored while running script in '${pkg.name}'`);
+        } else {
+          output(stdout);
+        }
+        callback(err);
       }
-      callback(err);
-    });
+    );
   }
 }

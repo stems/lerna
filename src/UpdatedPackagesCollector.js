@@ -1,8 +1,18 @@
 import _ from "lodash";
 import minimatch from "minimatch";
 import path from "path";
+import semver from "semver";
 
 import GitUtilities from "./GitUtilities";
+
+// TODO: remove this when we _really_ remove support for SECRET_FLAG
+const Buffer = require("safe-buffer").Buffer; // eslint-disable-line prefer-destructuring
+
+const SECRET_FLAG = Buffer.from(
+  // eslint-disable-next-line max-len
+  "ZGFuZ2Vyb3VzbHlPbmx5UHVibGlzaEV4cGxpY2l0VXBkYXRlc1RoaXNJc0FDdXN0b21GbGFnRm9yQmFiZWxBbmRZb3VTaG91bGROb3RCZVVzaW5nSXRKdXN0RGVhbFdpdGhNb3JlUGFja2FnZXNCZWluZ1B1Ymxpc2hlZEl0SXNOb3RBQmlnRGVhbA==",
+  "base64"
+).toString("ascii");
 
 class Update {
   constructor(pkg) {
@@ -45,6 +55,7 @@ export default class UpdatedPackagesCollector {
     this.logger.silly("getUpdates");
 
     this.updatedPackages = this.collectUpdatedPackages();
+    this.prereleasedPackages = this.collectPrereleasedPackages();
     this.dependents = this.collectDependents();
     return this.collectUpdates();
   }
@@ -70,7 +81,7 @@ export default class UpdatedPackagesCollector {
 
     const updatedPackages = {};
 
-    const registerUpdated = (pkg) => {
+    const registerUpdated = pkg => {
       this.logger.verbose("updated", pkg.name);
       updatedPackages[pkg.name] = pkg;
     };
@@ -80,13 +91,14 @@ export default class UpdatedPackagesCollector {
     if (!since || forced.has("*")) {
       this.packages.forEach(registerUpdated);
     } else {
-      this.packages.filter((pkg) => {
-        if (forced.has(pkg.name)) {
-          return true;
-        } else {
+      this.packages
+        .filter(pkg => {
+          if (forced.has(pkg.name)) {
+            return true;
+          }
           return this.hasDiffSinceThatIsntIgnored(pkg, since);
-        }
-      }).forEach(registerUpdated);
+        })
+        .forEach(registerUpdated);
     }
 
     return updatedPackages;
@@ -105,9 +117,9 @@ export default class UpdatedPackagesCollector {
       return false;
     }
 
-    const dependencies = this.packageGraph.get(packageName).dependencies;
+    const graphDependencies = this.packageGraph.get(packageName).dependencies;
 
-    if (dependencies.indexOf(dependency) > -1) {
+    if (graphDependencies.indexOf(dependency) > -1) {
       this.cache[packageName][dependency] = "dependent";
       return true;
     }
@@ -116,7 +128,7 @@ export default class UpdatedPackagesCollector {
 
     let hasSubDependents = false;
 
-    dependencies.forEach((dep) => {
+    graphDependencies.forEach(dep => {
       if (this.isPackageDependentOf(dep, dependency)) {
         this.cache[packageName][dependency] = "dependent";
         hasSubDependents = true;
@@ -131,9 +143,10 @@ export default class UpdatedPackagesCollector {
 
     const dependents = {};
     this.cache = {};
+    const keys = Object.keys(Object.assign({}, this.updatedPackages, this.prereleasedPackages));
 
-    this.packages.forEach((pkg) => {
-      Object.keys(this.updatedPackages).forEach((dependency) => {
+    this.packages.forEach(pkg => {
+      keys.forEach(dependency => {
         if (this.isPackageDependentOf(pkg.name, dependency)) {
           this.logger.verbose("dependent", "%s depends on %s", pkg.name, dependency);
           dependents[pkg.name] = pkg;
@@ -144,25 +157,50 @@ export default class UpdatedPackagesCollector {
     return dependents;
   }
 
+  isPrereleaseIncrement() {
+    const { cdVersion } = this.options;
+    return cdVersion && cdVersion.startsWith("pre");
+  }
+
+  collectPrereleasedPackages() {
+    this.logger.info("", "Checking for prereleased packages...");
+    if (this.isPrereleaseIncrement()) {
+      return {};
+    }
+
+    const prereleasedPackages = {};
+
+    this.packages.forEach(pkg => {
+      if (semver.prerelease(pkg.version)) {
+        this.logger.verbose("prereleased", pkg.name);
+        prereleasedPackages[pkg.name] = pkg;
+      }
+    });
+
+    return prereleasedPackages;
+  }
+
   collectUpdates() {
     this.logger.silly("collectUpdates");
 
-    return this.packages.filter((pkg) => {
-      return (
-        this.updatedPackages[pkg.name] ||
-        (this.options[SECRET_FLAG] ? false : this.dependents[pkg.name]) ||
-        this.options.canary
-      );
-    }).map((pkg) => {
-      this.logger.verbose("has filtered update", pkg.name);
-      return new Update(pkg);
-    });
+    return this.packages
+      .filter(
+        pkg =>
+          this.updatedPackages[pkg.name] ||
+          this.prereleasedPackages[pkg.name] ||
+          (this.options[SECRET_FLAG] ? false : this.dependents[pkg.name]) ||
+          this.options.canary
+      )
+      .map(pkg => {
+        this.logger.verbose("has filtered update", pkg.name);
+        return new Update(pkg);
+      });
   }
 
   getAssociatedCommits(sha) {
     // if it's a merge commit, it will return all the commits that were part of the merge
     // ex: If `ab7533e` had 2 commits, ab7533e^..ab7533e would contain 2 commits + the merge commit
-    return sha.slice(0, 8) + "^.." + sha.slice(0, 8);
+    return `${sha.slice(0, 8)}^..${sha.slice(0, 8)}`;
   }
 
   hasDiffSinceThatIsntIgnored(pkg, commits) {
@@ -173,23 +211,14 @@ export default class UpdatedPackagesCollector {
       return false;
     }
 
-    let changedFiles = diff.split("\n").map((file) => {
-      return file.replace(folder + path.sep, "");
-    });
+    let changedFiles = diff.split("\n").map(file => file.replace(folder + path.sep, ""));
 
     if (this.options.ignore) {
-      changedFiles = changedFiles.filter((file) => {
-        return !_.find(this.options.ignore, (pattern) => {
-          return minimatch(file, pattern, { matchBase: true });
-        });
-      });
+      changedFiles = changedFiles.filter(
+        file => !_.find(this.options.ignore, pattern => minimatch(file, pattern, { matchBase: true }))
+      );
     }
 
     return !!changedFiles.length;
   }
 }
-
-// TODO: remove this when we _really_ remove support for SECRET_FLAG
-const Buffer = require("safe-buffer").Buffer;
-// eslint-disable-next-line max-len
-const SECRET_FLAG = Buffer.from("ZGFuZ2Vyb3VzbHlPbmx5UHVibGlzaEV4cGxpY2l0VXBkYXRlc1RoaXNJc0FDdXN0b21GbGFnRm9yQmFiZWxBbmRZb3VTaG91bGROb3RCZVVzaW5nSXRKdXN0RGVhbFdpdGhNb3JlUGFja2FnZXNCZWluZ1B1Ymxpc2hlZEl0SXNOb3RBQmlnRGVhbA==", "base64").toString("ascii");

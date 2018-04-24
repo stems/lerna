@@ -23,8 +23,7 @@ jest.mock("../src/PromptUtilities");
 // silence logs
 log.level = "silent";
 
-const lastCommitInDir = (cwd) =>
-  execa.stdout("git", ["log", "-1", "--format=%s"], { cwd });
+const lastCommitInDir = cwd => execa.stdout("git", ["log", "-1", "--format=%s"], { cwd });
 
 describe("ImportCommand", () => {
   beforeEach(() => {
@@ -76,7 +75,9 @@ describe("ImportCommand", () => {
       await execa("git", ["commit", "-am", "master content written"], cwdExternalDir);
       try {
         await execa("git", ["merge", branchName], cwdExternalDir);
-      } catch (e) {}
+      } catch (e) {
+        // skip
+      }
 
       await fs.writeFile(conflictedFile, "merged content");
       await execa("git", ["add", conflictedFileName], cwdExternalDir);
@@ -90,23 +91,39 @@ describe("ImportCommand", () => {
       expect(await pathExists(newFilePath)).toBe(true);
     });
 
-    it.skip("works with --max-buffer", async () => {
-      await lernaImport(externalDir, "--max-buffer=1");
-      // TODO: this test kinda sucks, should never have to read instance properties
-      // expect(importCommand.execOpts).toHaveProperty("maxBuffer", ONE_HUNDRED_MEGABYTES);
-      // expect(importCommand.externalExecOpts).toHaveProperty("maxBuffer", ONE_HUNDRED_MEGABYTES);
-    });
+    // FIXME: this test kinda sucks, should never have to read instance properties
+    // it("works with --max-buffer", async () => {
+    //   await lernaImport(externalDir, "--max-buffer=1");
+    // });
 
     it("supports moved files within the external repo", async () => {
       const newFilePath = path.join(testDir, "packages", path.basename(externalDir), "new-file");
 
       await execa("git", ["mv", "old-file", "new-file"], { cwd: externalDir });
-      await execa("git", ["commit", "-m", "Moved old-file to new-file"], { cwd: externalDir });
+      await execa("git", ["commit", "-m", "Moved old-file to new-file"], {
+        cwd: externalDir,
+      });
 
       await lernaImport(externalDir);
 
       expect(await lastCommitInDir(testDir)).toBe("Moved old-file to new-file");
       expect(await pathExists(newFilePath)).toBe(true);
+    });
+
+    it("skips empty patches with --flatten", async () => {
+      const cwdExternalDir = { cwd: externalDir };
+      const filePath = path.join(externalDir, "file.txt");
+
+      await fs.writeFile(filePath, "non-empty content");
+      await execa("git", ["add", filePath], cwdExternalDir);
+      await execa("git", ["commit", "-m", "Non-empty commit"], cwdExternalDir);
+
+      await execa("git", ["commit", "--allow-empty", "-m", "Empty commit"], cwdExternalDir);
+
+      const { exitCode } = await lernaImport(externalDir, "--flatten");
+
+      expect(await lastCommitInDir(testDir)).toBe("Non-empty commit");
+      expect(exitCode).toBe(0);
     });
 
     it("exits early when confirmation is rejected", async () => {
@@ -133,7 +150,7 @@ describe("ImportCommand", () => {
     });
 
     it("errors when external directory is missing", async () => {
-      const missing = externalDir + "_invalidSuffix";
+      const missing = `${externalDir}_invalidSuffix`;
 
       try {
         await lernaImport(missing);
@@ -212,6 +229,49 @@ describe("ImportCommand", () => {
         expect(err.exitCode).toBe(1);
         expect(err.message).toBe("Local repository has un-committed changes");
       }
+    });
+
+    it("does not remove custom subject prefixes in [brackets]", async () => {
+      const newFilePath = path.join(testDir, "packages", path.basename(externalDir), "new-file");
+
+      await execa("git", ["mv", "old-file", "new-file"], { cwd: externalDir });
+      await execa("git", ["commit", "-m", "[ISSUE-10] Moved old-file to new-file"], {
+        cwd: externalDir,
+      });
+
+      await lernaImport(externalDir);
+
+      expect(await lastCommitInDir(testDir)).toBe("[ISSUE-10] Moved old-file to new-file");
+      expect(await pathExists(newFilePath)).toBe(true);
+    });
+  });
+
+  describe("with non-root Lerna dir", () => {
+    let testDir;
+    let lernaRootDir;
+    let externalDir;
+    let lernaImport;
+
+    beforeEach(async () => {
+      const [extDir, fixtureDir] = await Promise.all([
+        initFixture("ImportCommand/external", "Init external commit"),
+        initFixture("ImportCommand/lerna-not-in-root"),
+      ]);
+
+      externalDir = extDir;
+      testDir = fixtureDir;
+      lernaRootDir = path.join(testDir, "subdir");
+      lernaImport = run(lernaRootDir);
+    });
+
+    // Issue 1197
+    it("creates a module in packages location with imported commit history", async () => {
+      const packageJson = path.join(lernaRootDir, "packages", path.basename(externalDir), "package.json");
+
+      await lernaImport(externalDir);
+
+      expect(await lastCommitInDir(testDir)).toBe("Init external commit");
+      expect(await pathExists(packageJson)).toBe(true);
     });
   });
 });

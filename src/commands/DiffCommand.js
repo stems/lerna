@@ -5,8 +5,9 @@ import Command from "../Command";
 import GitUtilities from "../GitUtilities";
 
 export function handler(argv) {
-  new DiffCommand([argv.pkg], argv, argv._cwd).run()
-    .then(argv._onFinish, argv._onFinish);
+  // eslint-disable-next-line no-use-before-define
+  const cmd = new DiffCommand([argv.pkg], argv, argv._cwd);
+  return cmd.run().then(argv._onResolved, argv._onRejected);
 }
 
 export const command = "diff [pkg]";
@@ -33,12 +34,10 @@ export default class DiffCommand extends Command {
     let targetPackage;
 
     if (packageName) {
-      targetPackage = _.find(this.packages, (pkg) => {
-        return pkg.name === packageName;
-      });
+      targetPackage = _.find(this.packages, pkg => pkg.name === packageName);
 
       if (!targetPackage) {
-        callback(new Error("Package '" + packageName + "' does not exist."));
+        callback(new Error(`Package '${packageName}' does not exist.`));
         return;
       }
     }
@@ -60,7 +59,7 @@ export default class DiffCommand extends Command {
   }
 
   execute(callback) {
-    ChildProcessUtilities.spawn("git", this.args, this.execOpts, (err) => {
+    ChildProcessUtilities.spawn("git", this.args, this.execOpts, err => {
       if (err && err.code) {
         callback(err);
       } else {

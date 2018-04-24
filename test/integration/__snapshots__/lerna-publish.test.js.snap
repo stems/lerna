@@ -130,6 +130,49 @@ Array [
 ]
 `;
 
+exports[`packages: updates all transitive dependents 1`] = `
+Array [
+  Object {
+    "description": "no local dependencies, four local dependents (three transitive)",
+    "foo": true,
+    "name": "package-1",
+    "version": "2.0.0",
+  },
+  Object {
+    "dependencies": Object {
+      "package-1": "^2.0.0",
+    },
+    "description": "one local dependency, one direct dependent, no transitive dependencies",
+    "name": "package-2",
+    "version": "2.0.0",
+  },
+  Object {
+    "dependencies": Object {
+      "package-2": "^2.0.0",
+    },
+    "description": "one local dependency, one direct dependent, one transitive dependency",
+    "name": "package-3",
+    "version": "2.0.0",
+  },
+  Object {
+    "dependencies": Object {
+      "package-3": "^2.0.0",
+    },
+    "description": "one local dependency, one direct dependent, two transitive dependencies",
+    "name": "package-4",
+    "version": "2.0.0",
+  },
+  Object {
+    "dependencies": Object {
+      "package-4": "^2.0.0",
+    },
+    "description": "one local dependency, no dependents, three transitive dependencies",
+    "name": "package-5",
+    "version": "2.0.0",
+  },
+]
+`;
+
 exports[`packages: updates fixed versions 1`] = `
 Array [
   Object {
@@ -148,6 +191,9 @@ Array [
       "package-2": "^1.0.1",
     },
     "name": "package-3",
+    "peerDependencies": Object {
+      "package-2": "^1.0.0",
+    },
     "version": "1.0.1",
   },
   Object {
@@ -212,6 +258,7 @@ lerna info canary enabled
 lerna info current version 1.0.0
 lerna info Checking for updated packages...
 lerna info Comparing with initial commit.
+lerna info Checking for prereleased packages...
 lerna info auto-confirmed "
 `;
 
@@ -221,6 +268,7 @@ lerna info canary enabled
 lerna info current version 1.0.0
 lerna info Checking for updated packages...
 lerna info Comparing with initial commit.
+lerna info Checking for prereleased packages...
 lerna info auto-confirmed "
 `;
 
@@ -229,6 +277,7 @@ exports[`stderr: exit 0 when no updates 1`] = `
 lerna info current version 1.0.0
 lerna info Checking for updated packages...
 lerna info Comparing with v1.0.0.
+lerna info Checking for prereleased packages...
 lerna info No updated packages to publish. "
 `;
 
@@ -237,6 +286,7 @@ exports[`stderr: updates fixed versions 1`] = `
 lerna info current version 1.0.0
 lerna info Checking for updated packages...
 lerna info Comparing with initial commit.
+lerna info Checking for prereleased packages...
 lerna info auto-confirmed "
 `;
 
@@ -245,6 +295,7 @@ exports[`stderr: updates independent versions 1`] = `
 lerna info versioning independent
 lerna info Checking for updated packages...
 lerna info Comparing with initial commit.
+lerna info Checking for prereleased packages...
 lerna info auto-confirmed "
 `;
 
@@ -315,6 +366,17 @@ exports[`stdout: second feature added in fixed mode --conventional-commits 1`] =
 "
 Changes:
  - package-2: 1.1.0 => 1.2.0
+"
+`;
+
+exports[`stdout: updates all transitive dependents 1`] = `
+"
+Changes:
+ - package-1: 1.0.0 => 2.0.0
+ - package-2: 1.0.0 => 2.0.0
+ - package-3: 1.0.0 => 2.0.0
+ - package-4: 1.0.0 => 2.0.0
+ - package-5: 1.0.0 => 2.0.0
 "
 `;
 

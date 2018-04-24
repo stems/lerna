@@ -1,3 +1,4 @@
+import dedent from "dedent";
 import findUp from "find-up";
 import globParent from "glob-parent";
 import loadJsonFile from "load-json-file";
@@ -7,19 +8,18 @@ import readPkg from "read-pkg";
 import semver from "semver";
 
 import dependencyIsSatisfied from "./utils/dependencyIsSatisfied";
+import ValidationError from "./utils/ValidationError";
 import Package from "./Package";
 
 const DEFAULT_PACKAGE_GLOB = "packages/*";
 
 export default class Repository {
   constructor(cwd) {
-    const lernaJsonLocation = (
+    const lernaJsonLocation =
       // findUp returns null when not found
       findUp.sync("lerna.json", { cwd }) ||
-
       // path.resolve(".", ...) starts from process.cwd()
-      path.resolve((cwd || "."), "lerna.json")
-    );
+      path.resolve(cwd || ".", "lerna.json");
 
     this.rootPath = path.dirname(lernaJsonLocation);
     log.verbose("rootPath", this.rootPath);
@@ -32,7 +32,11 @@ export default class Repository {
     if (!this._lernaJson) {
       try {
         this._lernaJson = loadJsonFile.sync(this.lernaJsonLocation);
-      } catch (ex) {
+      } catch (err) {
+        // don't swallow syntax errors
+        if (err.name === "JSONError") {
+          throw new ValidationError(err.name, err.message);
+        }
         // No need to distinguish between missing and empty,
         // saves a lot of noisy guards elsewhere
         this._lernaJson = {};
@@ -56,21 +60,34 @@ export default class Repository {
 
   get packageConfigs() {
     if (this.lernaJson.useWorkspaces) {
-      return this.packageJson.workspaces;
+      if (!this.packageJson.workspaces) {
+        throw new ValidationError(
+          "EWORKSPACES",
+          dedent`
+            Yarn workspaces need to be defined in the root package.json.
+            See: https://github.com/lerna/lerna#--use-workspaces
+          `
+        );
+      }
+
+      return this.packageJson.workspaces.packages || this.packageJson.workspaces;
     }
     return this.lernaJson.packages || [DEFAULT_PACKAGE_GLOB];
   }
 
   get packageParentDirs() {
-    return this.packageConfigs.map(globParent)
-      .map(parentDir => path.resolve(this.rootPath, parentDir));
+    return this.packageConfigs.map(globParent).map(parentDir => path.resolve(this.rootPath, parentDir));
   }
 
   get packageJson() {
     if (!this._packageJson) {
       try {
         this._packageJson = readPkg.sync(this.packageJsonLocation, { normalize: false });
-      } catch (ex) {
+      } catch (err) {
+        // don't swallow syntax errors
+        if (err.name === "JSONError") {
+          throw new ValidationError(err.name, err.message);
+        }
         // try again next time
         this._packageJson = null;
       }
@@ -103,8 +120,6 @@ export default class Repository {
   hasDependencyInstalled(depName, version) {
     log.silly("hasDependencyInstalled", "ROOT", depName, version);
 
-    return dependencyIsSatisfied(
-      this.nodeModulesLocation, depName, version
-    );
+    return dependencyIsSatisfied(this.nodeModulesLocation, depName, version);
   }
 }

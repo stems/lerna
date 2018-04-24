@@ -12,24 +12,26 @@ import filterFlags from "./utils/filterFlags";
 import writeLogFile from "./utils/writeLogFile";
 import UpdatedPackagesCollector from "./UpdatedPackagesCollector";
 import VersionSerializer from "./VersionSerializer";
+import ValidationError from "./utils/ValidationError";
 
 // handle log.success()
 log.addLevel("success", 3001, { fg: "green", bold: true });
 
 const DEFAULT_CONCURRENCY = 4;
+const LERNA_VERSION = require("../package.json").version;
 
 export const builder = {
-  "loglevel": {
+  loglevel: {
     defaultDescription: "info",
     describe: "What level of logs to report.",
     type: "string",
   },
-  "concurrency": {
+  concurrency: {
     describe: "How many threads to use if lerna parallelises the tasks.",
     type: "number",
     requiresArg: true,
   },
-  "scope": {
+  scope: {
     describe: dedent`
       Restricts the scope to package names matching the given glob.
       (Only for 'run', 'exec', 'clean', 'ls', and 'bootstrap' commands)
@@ -37,7 +39,7 @@ export const builder = {
     type: "string",
     requiresArg: true,
   },
-  "since": {
+  since: {
     describe: dedent`
       Restricts the scope to the packages that have been updated since
       the specified [ref], or if not specified, the latest tag.
@@ -46,7 +48,7 @@ export const builder = {
     type: "string",
     requiresArg: false,
   },
-  "ignore": {
+  ignore: {
     describe: dedent`
       Ignore packages with names matching the given glob.
       (Only for 'run', 'exec', 'clean', 'ls', and 'bootstrap' commands)
@@ -59,12 +61,17 @@ export const builder = {
       Include all transitive dependencies when running a command, regardless of --scope, --since or --ignore.
     `,
   },
-  "registry": {
+  registry: {
     describe: "Use the specified registry for all npm client operations.",
     type: "string",
     requiresArg: true,
   },
-  "sort": {
+  "reject-cycles": {
+    describe: "Fail if a cycle is detected among dependencies",
+    type: "boolean",
+    default: false,
+  },
+  sort: {
     describe: "Sort packages topologically (all dependencies before dependents)",
     type: "boolean",
     default: undefined,
@@ -73,16 +80,8 @@ export const builder = {
     describe: "Set max-buffer(bytes) for Command execution",
     type: "number",
     requiresArg: true,
-  }
+  },
 };
-
-export class ValidationError extends Error {
-  constructor(prefix, message) {
-    super(message);
-    this.name = "ValidationError";
-    log.error(prefix, message);
-  }
-}
 
 class ValidationWarning extends Error {
   constructor(message) {
@@ -103,7 +102,7 @@ export default class Command {
     log.silly("input", input);
     log.silly("flags", filterFlags(flags));
 
-    this.lernaVersion = require("../package.json").version;
+    this.lernaVersion = LERNA_VERSION;
     this.repository = new Repository(cwd);
     this.logger = log.newGroup(this.name);
   }
@@ -166,10 +165,9 @@ export default class Command {
       const { commands, command } = this.repository.lernaJson;
 
       // The current command always overrides otherCommandConfigs
-      const lernaCommandOverrides = [
-        this.name,
-        ...this.otherCommandConfigs,
-      ].map((name) => (commands || command || {})[name]);
+      const lernaCommandOverrides = [this.name, ...this.otherCommandConfigs].map(
+        name => (commands || command || {})[name]
+      );
 
       this._options = _.defaults(
         {},
@@ -197,23 +195,14 @@ export default class Command {
   }
 
   run() {
-    const { loglevel } = this.options;
-
-    if (loglevel) {
-      log.level = loglevel;
-    }
-
-    // no logging is emitted until run() is called
-    log.resume();
     log.info("version", this.lernaVersion);
-
-    if (this.repository.isIndependent()) {
-      log.info("versioning", "independent");
-    }
 
     return new Promise((resolve, reject) => {
       const onComplete = (err, exitCode) => {
         if (err) {
+          if (typeof err === "string") {
+            err = { stack: err }; // eslint-disable-line no-param-reassign
+          }
           err.exitCode = exitCode;
           reject(err);
         } else {
@@ -222,6 +211,7 @@ export default class Command {
       };
 
       try {
+        this.configureLogging();
         this.runValidations();
         this.runPreparations();
       } catch (err) {
@@ -232,11 +222,25 @@ export default class Command {
     });
   }
 
+  configureLogging() {
+    // this.options getter might throw (invalid JSON in lerna.json)
+    const { loglevel } = this.options;
+
+    if (loglevel) {
+      log.level = loglevel;
+    }
+
+    // emit all buffered logs at configured level and higher
+    log.resume();
+  }
+
   runValidations() {
+    const { independent, onlyExplicitUpdates } = this.options;
+
     if (this.requiresGit && !GitUtilities.isInitialized(this.execOpts)) {
       throw new ValidationError(
         "ENOGIT",
-        "This is not a git repository, did you already run `git init` or `lerna init`?"
+        "git binary missing, or this is not a git repository. Did you already run `git init` or `lerna init`?"
       );
     }
 
@@ -248,7 +252,7 @@ export default class Command {
       throw new ValidationError("ENOLERNA", "`lerna.json` does not exist, have you run `lerna init`?");
     }
 
-    if (this.options.independent && !this.repository.isIndependent()) {
+    if (independent && !this.repository.isIndependent()) {
       throw new ValidationError(
         "EVERSIONMODE",
         dedent`
@@ -265,8 +269,8 @@ export default class Command {
         dedent`
           Incompatible local version of lerna detected!
           The running version of lerna is ${this.lernaVersion}, but the version in lerna.json is ${
-            this.repository.initVersion
-          }.
+          this.repository.initVersion
+        }.
           You can either run 'lerna init' again or install 'lerna@^${this.repository.initVersion}'.
         `
       );
@@ -275,24 +279,36 @@ export default class Command {
     /* eslint-disable max-len */
     // TODO: remove these warnings eventually
     if (FileSystemUtilities.existsSync(this.repository.versionLocation)) {
-      throw new ValidationWarning("You have a `VERSION` file in your repository, this is leftover from a previous version. Please run `lerna init` to update.");
+      throw new ValidationWarning(
+        "You have a `VERSION` file in your repository, this is leftover from a previous version. Please run `lerna init` to update."
+      );
     }
 
     if (process.env.NPM_DIST_TAG !== undefined) {
-      throw new ValidationWarning("`NPM_DIST_TAG=[tagname] lerna publish` is deprecated, please use `lerna publish --tag [tagname]` instead.");
+      throw new ValidationWarning(
+        "`NPM_DIST_TAG=[tagname] lerna publish` is deprecated, please use `lerna publish --tag [tagname]` instead."
+      );
     }
 
     if (process.env.FORCE_VERSION !== undefined) {
-      throw new ValidationWarning("`FORCE_VERSION=[package/*] lerna updated/publish` is deprecated, please use `lerna updated/publish --force-publish [package/*]` instead.");
+      throw new ValidationWarning(
+        "`FORCE_VERSION=[package/*] lerna updated/publish` is deprecated, please use `lerna updated/publish --force-publish [package/*]` instead."
+      );
     }
 
-    if (this.options.onlyExplicitUpdates) {
-      throw new ValidationWarning("`--only-explicit-updates` has been removed. This flag was only ever added for Babel and we never should have exposed it to everyone.");
+    if (onlyExplicitUpdates) {
+      throw new ValidationWarning(
+        "`--only-explicit-updates` has been removed. This flag was only ever added for Babel and we never should have exposed it to everyone."
+      );
     }
     /* eslint-enable max-len */
   }
 
   runPreparations() {
+    if (this.repository.isIndependent()) {
+      log.info("versioning", "independent");
+    }
+
     const { rootPath, packageConfigs } = this.repository;
     const { scope, ignore, registry, since, useGitVersion, gitVersionPrefix } = this.options;
 
@@ -314,10 +330,10 @@ export default class Command {
       const packageGraph = PackageUtilities.getPackageGraph(packages, false, versionParser);
 
       if (useGitVersion) {
-        packages.forEach((pkg) => {
+        packages.forEach(pkg => {
           pkg.versionSerializer = new VersionSerializer({
             graphDependencies: packageGraph.get(pkg.name).dependencies,
-            versionParser
+            versionParser,
           });
         });
       }
@@ -329,8 +345,8 @@ export default class Command {
       // The UpdatedPackagesCollector requires that filteredPackages be present prior to checking for
       // updates. That's okay because it further filters based on what's already been filtered.
       if (typeof since === "string") {
-        const updated = new UpdatedPackagesCollector(this).getUpdates().map((update) => update.package.name);
-        this.filteredPackages = this.filteredPackages.filter((pkg) => updated.indexOf(pkg.name) > -1);
+        const updated = new UpdatedPackagesCollector(this).getUpdates().map(update => update.package.name);
+        this.filteredPackages = this.filteredPackages.filter(pkg => updated.indexOf(pkg.name) > -1);
       }
 
       if (this.options.includeFilteredDependencies) {
@@ -343,11 +359,19 @@ export default class Command {
   }
 
   runCommand(callback) {
-    this._attempt("initialize", () => {
-      this._attempt("execute", () => {
-        this._complete(null, 0, callback);
-      }, callback);
-    }, callback);
+    this._attempt(
+      "initialize",
+      () => {
+        this._attempt(
+          "execute",
+          () => {
+            this._complete(null, 0, callback);
+          },
+          callback
+        );
+      },
+      callback
+    );
   }
 
   _attempt(method, next, callback) {
@@ -383,18 +407,14 @@ export default class Command {
   }
 
   _complete(err, code, callback) {
-    if (
-      err &&
-      err.name !== "ValidationWarning" &&
-      err.name !== "ValidationError"
-    ) {
+    if (err && err.name !== "ValidationWarning" && err.name !== "ValidationError") {
       writeLogFile(this.repository.rootPath);
     }
 
     // process.exit() is an anti-pattern
     process.exitCode = code;
 
-    const finish = function() {
+    const finish = () => {
       if (callback) {
         callback(err, code);
       }
@@ -405,8 +425,8 @@ export default class Command {
       log.warn(
         "complete",
         `Waiting for ${childProcessCount} child ` +
-        `process${childProcessCount === 1 ? "" : "es"} to exit. ` +
-        "CTRL-C to exit immediately."
+          `process${childProcessCount === 1 ? "" : "es"} to exit. ` +
+          "CTRL-C to exit immediately."
       );
       ChildProcessUtilities.onAllExited(finish);
     } else {
@@ -444,26 +464,22 @@ export default class Command {
   }
 
   _logPackageError(method, err) {
-    log.error(method, dedent`
-      Error occured with '${err.pkg.name}' while running '${err.cmd}'
-    `);
+    log.error(method, `Error occured with '${err.pkg.name}' while running '${err.cmd}'`);
 
     const pkgPrefix = `${err.cmd} [${err.pkg.name}]`;
     log.error(pkgPrefix, `Output from stdout:`);
     log.pause();
-    console.error(err.stdout);
+    console.error(err.stdout); // eslint-disable-line no-console
 
     log.resume();
     log.error(pkgPrefix, `Output from stderr:`);
     log.pause();
-    console.error(err.stderr);
+    console.error(err.stderr); // eslint-disable-line no-console
 
     // Below is just to ensure something sensible is printed after the long
     // stream of logs
     log.resume();
-    log.error(method, dedent`
-      Error occured with '${err.pkg.name}' while running '${err.cmd}'
-    `);
+    log.error(method, `Error occured with '${err.pkg.name}' while running '${err.cmd}'`);
   }
 }
 
@@ -472,8 +488,8 @@ export function commandNameFromClassName(className) {
 }
 
 function cleanStack(err, className) {
-  const lines = err.stack.split('\n');
+  const lines = err.stack ? err.stack.split("\n") : err.split("\n");
   const cutoff = new RegExp(`^    at ${className}._attempt .*$`);
-  const relevantIndex = lines.findIndex((line) => cutoff.test(line));
-  return lines.slice(0, relevantIndex).join('\n');
+  const relevantIndex = lines.findIndex(line => cutoff.test(line));
+  return lines.slice(0, relevantIndex).join("\n");
 }

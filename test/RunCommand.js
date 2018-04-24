@@ -23,22 +23,19 @@ jest.mock("../src/utils/output");
 // silence logs
 log.level = "silent";
 
-const ranInPackages = (testDir) =>
-  NpmUtilities.runScriptInDir.mock.calls.reduce((arr, args) => {
-    const script = args[0];
-    const params = args[1];
-    const dir = normalizeRelativeDir(testDir, args[2]);
-    arr.push([dir, script].concat(params).join(" "));
+const ranInPackages = testDir =>
+  NpmUtilities.runScriptInDir.mock.calls.reduce((arr, [script, cfg]) => {
+    const { args, directory } = cfg;
+    const dir = normalizeRelativeDir(testDir, directory);
+    arr.push([dir, script].concat(args).join(" "));
     return arr;
   }, []);
 
-const ranInPackagesStreaming = (testDir) =>
-  NpmUtilities.runScriptInPackageStreaming.mock.calls.reduce((arr, args) => {
-    const script = args[0];
-    const params = args[1];
-    const pkg = args[2];
+const ranInPackagesStreaming = testDir =>
+  NpmUtilities.runScriptInPackageStreaming.mock.calls.reduce((arr, [script, cfg]) => {
+    const { args, pkg } = cfg;
     const dir = normalizeRelativeDir(testDir, pkg.location);
-    arr.push([dir, script].concat(params).join(" "));
+    arr.push([dir, script].concat(args).join(" "));
     return arr;
   }, []);
 
@@ -72,12 +69,6 @@ describe("RunCommand", () => {
       expect(ranInPackagesStreaming(testDir)).toMatchSnapshot("run <script> --stream");
     });
 
-    it("always runs test script", async () => {
-      await lernaRun("test");
-
-      expect(ranInPackages(testDir)).toMatchSnapshot("run test");
-    });
-
     it("always runs env script", async () => {
       await lernaRun("env");
 
@@ -87,30 +78,29 @@ describe("RunCommand", () => {
     it("runs a script only in scoped packages", async () => {
       await lernaRun("my-script", "--scope", "package-1");
 
-      expect(ranInPackages(testDir))
-        .toMatchSnapshot(`run <script> --scope package-1`);
+      expect(ranInPackages(testDir)).toMatchSnapshot(`run <script> --scope package-1`);
     });
 
     it("does not run a script in ignored packages", async () => {
       await lernaRun("my-script", "--ignore", "package-@(2|3|4)");
 
-      expect(ranInPackages(testDir))
-        .toMatchSnapshot(`run <script> --ignore package-@(2|3|4)`);
+      expect(ranInPackages(testDir)).toMatchSnapshot(`run <script> --ignore package-@(2|3|4)`);
     });
 
     it("should filter packages that are not updated with --since", async () => {
-      UpdatedPackagesCollector.prototype.getUpdates = jest.fn(() => [{
-        package: {
-          name: "package-3",
-          location: path.join(testDir, "packages/package-3"),
-          scripts: { "my-script": "echo package-3" },
+      UpdatedPackagesCollector.prototype.getUpdates = jest.fn(() => [
+        {
+          package: {
+            name: "package-3",
+            location: path.join(testDir, "packages/package-3"),
+            scripts: { "my-script": "echo package-3" },
+          },
         },
-      }]);
+      ]);
 
       await lernaRun("my-script", "--since");
 
-      expect(ranInPackages(testDir))
-        .toMatchSnapshot("run <script> --since");
+      expect(ranInPackages(testDir)).toMatchSnapshot("run <script> --since");
     });
 
     it("does not error when no packages match", async () => {
@@ -123,8 +113,7 @@ describe("RunCommand", () => {
     it("runs a script in all packages with --parallel", async () => {
       await lernaRun("env", "--parallel");
 
-      expect(ranInPackagesStreaming(testDir))
-        .toMatchSnapshot("run <script> --parallel");
+      expect(ranInPackagesStreaming(testDir)).toMatchSnapshot("run <script> --parallel");
     });
   });
 
@@ -134,8 +123,9 @@ describe("RunCommand", () => {
       const lernaRun = run(testDir);
       await lernaRun("my-script", "--scope", "@test/package-2", "--include-filtered-dependencies");
 
-      expect(ranInPackages(testDir))
-        .toMatchSnapshot("run <script> --scope @test/package-2 --include-filtered-dependencies");
+      expect(ranInPackages(testDir)).toMatchSnapshot(
+        "run <script> --scope @test/package-2 --include-filtered-dependencies"
+      );
     });
   });
 });

@@ -173,7 +173,7 @@ It will configure `lerna.json` to enforce exact match for all subsequent executi
 ```json
 {
   "lerna": "2.0.0",
-  "command": {
+  "commands": {
     "init": {
       "exact": true
     }
@@ -198,7 +198,7 @@ When run, this command will:
 3. `npm run prepublish` in all bootstrapped packages.
 4. `npm run prepare` in all bootstrapped packages.
 
-`lerna bootstrap` respects the `--ignore`, `--scope` and `--include-filtered-dependencies` flags (see [Flags](#flags)).
+`lerna bootstrap` respects the `--ignore`, `--ignore-scripts`, `--scope` and `--include-filtered-dependencies` flags (see [Flags](#flags)).
 
 Pass extra arguments to npm client by placing them after `--`:
 
@@ -222,6 +222,30 @@ Let's use `babel` as an example.
 
 - `babel-generator` and `source-map` (among others) are dependencies of `babel-core`.
 -  `babel-core`'s [`package.json`](https://github.com/babel/babel/blob/13c961d29d76ccd38b1fc61333a874072e9a8d6a/packages/babel-core/package.json#L28-L47) lists both these packages as keys in `dependencies`, as shown below.
+
+### add
+
+```sh
+$ lerna add <package>[@version] [--dev]
+```
+
+Add local or remote `package` as dependency to packages in the current Lerna repo.
+
+When run, this command will:
+
+1. Add `package` to each applicable package. Applicable are packages that are not `package` and are in scope
+2. Bootstrap packages with changes to their manifest file (`package.json`)
+
+`lerna add` respects the `--ignore`, `--scope` and `--include-filtered-dependencies` flags (see [Flags](#flags)).
+
+#### Examples
+
+```
+lerna add module-1 --scope=module-2 # Install module-1 to module-2
+lerna add module-1 --scope=module-2 --dev # Install module-1 to module-2 in devDependencies
+lerna add module-1 # Install module-1 in all modules except module-1
+lerna add babel-core # Install babel-core in all modules
+```
 
 ```js
 // babel-core package.json
@@ -274,6 +298,14 @@ More specifically, this command will:
 
 > Lerna won't publish packages which are marked as private (`"private": true` in the `package.json`).
 
+**Note:** to publish scoped packages, you need to add the following to each `package.json`:
+
+```js
+"publishConfig": {
+  "access": "public"
+}
+```
+
 #### --exact
 
 ```sh
@@ -315,6 +347,16 @@ $ lerna publish --conventional-commits
 ```
 
 When run with this flag, `publish` will use the [Conventional Commits Specification](https://conventionalcommits.org/) to [determine the version bump](https://github.com/conventional-changelog/conventional-changelog/tree/master/packages/conventional-recommended-bump) and [generate CHANGELOG](https://github.com/conventional-changelog/conventional-changelog/tree/master/packages/conventional-changelog-cli)
+
+#### --changelog-preset
+
+```sh
+$ lerna publish --conventional-commits --changelog-preset=angular-bitbucket
+```
+
+By default, the changelog preset is set to `angular`. In some cases you might want to change either use a another preset or a custom one.
+
+Presets are names of built-in or installable configuration for conventional changelog.
 
 #### --git-remote [remote]
 
@@ -384,8 +426,9 @@ $ lerna publish --cd-version (major | minor | patch | premajor | preminor | prep
 ```
 
 When run with this flag, `publish` will skip the version selection prompt (in independent mode) and use the next specified semantic version.
-You must still use the `--yes` flag to avoid all prompts. This is useful when build systems need
-to publish without command prompts. Works in both normal and independent modes.
+You must still use the `--yes` flag to avoid all prompts. This is useful when build systems need to publish without command prompts. Works in both normal and independent modes.
+
+If you have any packages with a prerelease version number (e.g. `2.0.0-beta.3`) and you run `lerna publish` with `--cd-version` and a non-prerelease version increment (major / minor / patch), it will publish those packages in addition to the packages that have changed since the last release.
 
 #### --preid
 
@@ -419,6 +462,9 @@ Useful for bypassing the user input prompt if you already know which version to 
 $ lerna publish -m "chore(release): publish %s"
 # commit message = "chore(release): publish v1.0.0"
 
+$ lerna publish -m "chore(release): publish %v"
+# commit message = "chore(release): publish 1.0.0"
+
 $ lerna publish -m "chore(release): publish" --independent
 # commit message = "chore(release): publish
 #
@@ -431,21 +477,46 @@ for publication. Useful for integrating lerna into projects that expect commit m
 to certain guidelines, such as projects which use [commitizen](https://github.com/commitizen/cz-cli) and/or [semantic-release](https://github.com/semantic-release/semantic-release).
 
 If the message contains `%s`, it will be replaced with the new global version version number prefixed with a "v".
+If the message contains `%v`, it will be replaced with the new global version version number without the leading "v".
 Note that this only applies when using the default "fixed" versioning mode, as there is no "global" version when using `--independent`.
+
+This can be configured in lerna.json, as well:
+```json
+{
+  "commands": {
+    "publish": {
+      "message": "chore(release): publish %s"
+    }
+  }
+}
+```
 
 #### --allow-branch [glob]
 
-Lerna allows you to specify a glob in your `lerna.json` that your current branch needs to match to be publishable.
+Lerna allows you to specify a glob or an array of globs in your `lerna.json` that your current branch needs to match to be publishable.
 You can use this flag to override this setting.
 If your `lerna.json` contains something like this:
 
 ```json
 {
-    "command": {
-        "publish": {
-          "allowBranch": "master"
-        }
+  "commands": {
+    "publish": {
+      "allowBranch": "master"
     }
+  }
+}
+```
+
+```json
+{
+  "command": {
+    "publish": {
+      "allowBranch": [
+        "master",
+        "feature/*"
+      ]
+    }
+  }
 }
 ```
 
@@ -552,7 +623,7 @@ $ lerna run --parallel watch
 
 Run an [npm script](https://docs.npmjs.com/misc/scripts) in each package that contains that script. A double-dash (`--`) is necessary to pass dashed arguments to the script execution.
 
-`lerna run` respects the `--concurrency`, `--scope`, `--ignore`, `--stream`, and `--parallel` flags (see [Flags](#flags)).
+`lerna run` respects the `--concurrency`, `--scope`, `--ignore`, `--stream`, `--prefix` and `--parallel` flags (see [Flags](#flags)).
 
 ```sh
 $ lerna run --scope my-component test
@@ -574,7 +645,7 @@ $ lerna exec -- protractor conf.js
 Run an arbitrary command in each package.
 A double-dash (`--`) is necessary to pass dashed flags to the spawned command, but is not necessary when all the arguments are positional.
 
-`lerna exec` respects the `--concurrency`, `--scope`, `--ignore`, and `--parallel` flags (see [Flags](#flags)).
+`lerna exec` respects the `--concurrency`, `--scope`, `--ignore`, `--stream`  `--prefix` and `--parallel` flags (see [Flags](#flags)).
 
 ```sh
 $ lerna exec --scope my-component -- ls -la
@@ -636,6 +707,14 @@ $ lerna link
 ```
 
 Symlink together all Lerna `packages` that are dependencies of each other in the current Lerna repo.
+
+#### --force-local
+
+```sh
+$ lerna link --force-local
+```
+
+When passed, this flag causes the `link` command to always symlink local dependencies regardless of matching version range.
 
 ## Misc
 
@@ -716,7 +795,7 @@ Example:
   "lerna": "x.x.x",
   "version": "1.2.0",
   "exampleOption": "foo",
-  "command": {
+  "commands": {
     "init": {
       "exampleOption": "bar",
     }
@@ -807,6 +886,14 @@ The `ignore` flag, when used with the `bootstrap` command, can also be set in `l
 > Hint: The glob is matched against the package name defined in `package.json`,
 > not the directory name the package lives in.
 
+#### --ignore-scripts
+
+When used with the `bootstrap` command it won't run any lifecycle scripts in bootstrapped packages.
+
+```sh
+$ lerna bootstrap --ignore-scripts
+```
+
 #### --include-filtered-dependencies
 
 Used in combination with any command that accepts `--scope` (`bootstrap`, `clean`, `ls`, `run`, `exec`). Ensures that all dependencies (and dev dependencies) of any scoped packages (either through `--scope` or `--ignore`) are operated on as well.
@@ -891,6 +978,14 @@ May also be configured in `lerna.json`:
   ...
   "npmClient": "yarn"
 }
+```
+
+#### --reject-cycles
+
+Fail immediately if a cycle is found (in `bootstrap`, `exec`, `publish` or `run`).
+
+```sh
+$ lerna bootstrap --reject-cycles
 ```
 
 #### --use-workspaces
@@ -987,6 +1082,16 @@ package name. This allows output from different packages to be interleaved.
 
 ```sh
 $ lerna run watch --stream
+```
+
+#### --prefix
+
+By default, stream output is prefixed with the originating package name. This flag can be turned off
+so that the output can be parsed by a tool such as Visual Studio Code can highlight the result by type
+for all packages in the same project.
+
+```sh
+$ lerna run build --stream --no-prefix
 ```
 
 #### --parallel

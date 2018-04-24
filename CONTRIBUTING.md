@@ -1,10 +1,12 @@
 # Contributing to Lerna
 
+First, ensure you have the [latest `yarn`](https://yarnpkg.com/en/docs/install).
+
 To get started with the repo:
 
 ```sh
 $ git clone git@github.com:lerna/lerna.git && cd lerna
-$ npm install
+$ yarn
 ```
 
 ## Code Structure
@@ -21,38 +23,58 @@ Currently, the [source](https://github.com/lerna/lerna/tree/master/src) is split
 In order to run the tests:
 
 ```sh
-$ npm test
+$ yarn test
+
+# If you want to watch for changes
+$ yarn test:watch
+
+# If you want to watch individual files (e.g., in test/Command.js)
+$ yarn test:watch test.command
+```
+
+To run the integration tests:
+
+```sh
+$ yarn test:watch-integration
+
+# For a specific file
+$ yarn test:watch-integration lerna-publish
 ```
 
 Or the linter:
 
 ```sh
-$ npm run lint
+$ yarn lint
 ```
 
 If you want to test out Lerna on local repos:
 
 ```sh
-$ npm run build
-$ npm link
+$ yarn build
+$ yarn link
 ```
 
 This will set your global `lerna` command to the local version.
 
 Note that Lerna needs to be built after changes are made. So you can either run
-`npm run build` to run it once, or you can run:
+`yarn build` to run it once, or you can run:
 
 ```sh
-$ npm run dev
+$ yarn dev
 ```
 
 Which will start a watch task that will continuously re-build Lerna while you
 are working on it.
 
 If you would like to check test coverage, run the coverage script, then open
-coverage/lcov-report/index.html in your favorite browser.
+`coverage/lcov-report/index.html` in your favorite browser.
 
 ```sh
-$ npm run coverage
+$ yarn test --coverage
+
+# OS X
+$ open coverage/lcov-report/index.html
+
+# Linux
 $ xdg-open coverage/lcov-report/index.html
 ```

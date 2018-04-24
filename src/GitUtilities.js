@@ -1,6 +1,8 @@
 import { EOL } from "os";
 import log from "npmlog";
+import path from "path";
 import tempWrite from "temp-write";
+import slash from "slash";
 
 import ChildProcessUtilities from "./ChildProcessUtilities";
 
@@ -21,9 +23,13 @@ export default class GitUtilities {
 
     try {
       // we only want the return code, so ignore stdout/stderr
-      ChildProcessUtilities.execSync("git", ["rev-parse"], Object.assign({}, opts, {
-        stdio: "ignore"
-      }));
+      ChildProcessUtilities.execSync(
+        "git",
+        ["rev-parse"],
+        Object.assign({}, opts, {
+          stdio: "ignore",
+        })
+      );
       initialized = true;
     } catch (err) {
       log.verbose("isInitialized", "swallowed error", err);
@@ -37,12 +43,14 @@ export default class GitUtilities {
 
   static addFile(file, opts) {
     log.silly("addFile", file);
-    ChildProcessUtilities.execSync("git", ["add", file], opts);
+    const relativePath = path.relative(opts.cwd, path.resolve(opts.cwd, file));
+    const portablePath = slash(relativePath);
+    ChildProcessUtilities.execSync("git", ["add", portablePath], opts);
   }
 
   static commit(message, opts) {
     log.silly("commit", message);
-    const args = ["commit"];
+    const args = ["commit", "--no-verify"];
 
     if (message.indexOf(EOL) > -1) {
       // Use tempfile to allow multi\nline strings.
@@ -96,7 +104,7 @@ export default class GitUtilities {
   static getFirstCommit(opts) {
     log.silly("getFirstCommit");
 
-    const firstCommit =  ChildProcessUtilities.execSync("git", ["rev-list", "--max-parents=0", "HEAD"], opts);
+    const firstCommit = ChildProcessUtilities.execSync("git", ["rev-list", "--max-parents=0", "HEAD"], opts);
     log.verbose("getFirstCommit", firstCommit);
 
     return firstCommit;
@@ -106,8 +114,7 @@ export default class GitUtilities {
     log.silly("pushWithTags", [remote, tags]);
 
     const branch = GitUtilities.getCurrentBranch(opts);
-    ChildProcessUtilities.execSync("git", ["push", remote, branch], opts);
-    ChildProcessUtilities.execSync("git", ["push", remote].concat(tags), opts);
+    ChildProcessUtilities.execSync("git", ["push", "--no-verify", remote, branch].concat(tags), opts);
   }
 
   static getLastTag(opts) {
@@ -129,12 +136,25 @@ export default class GitUtilities {
   }
 
   static diffSinceIn(since, location, opts) {
-    log.silly("diffSinceIn", since, location);
+    const formattedLocation = path.relative(opts.cwd, location).replace(/\\/g, "/");
+    log.silly("diffSinceIn", since, formattedLocation);
 
-    const diff = ChildProcessUtilities.execSync("git", ["diff", "--name-only", since, "--", location], opts);
+    const diff = ChildProcessUtilities.execSync(
+      "git",
+      ["diff", "--name-only", since, "--", formattedLocation],
+      opts
+    );
     log.silly("diff", diff);
 
     return diff;
+  }
+
+  static getWorkspaceRoot(opts) {
+    log.silly("getWorkspaceRoot");
+    const root = ChildProcessUtilities.execSync("git", ["rev-parse", "--show-toplevel"], opts);
+    log.verbose("getWorkspaceRoot", root);
+
+    return root;
   }
 
   static getCurrentBranch(opts) {

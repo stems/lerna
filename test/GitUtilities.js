@@ -60,26 +60,26 @@ describe("GitUtilities", () => {
     it("calls git add with file argument", () => {
       const opts = { cwd: "test" };
       GitUtilities.addFile("foo", opts);
-      expect(ChildProcessUtilities.execSync).lastCalledWith("git", ["add", "foo"], opts);
+      expect(ChildProcessUtilities.execSync).lastCalledWith("git", ["add", "--update", "foo"], opts);
     });
     it("works with absolute path for cwd", () => {
       const cwd = path.resolve("test");
       const file = "foo";
       const opts = { cwd };
       GitUtilities.addFile(file, opts);
-      expect(ChildProcessUtilities.execSync).lastCalledWith("git", ["add", "foo"], opts);
+      expect(ChildProcessUtilities.execSync).lastCalledWith("git", ["add", "--update", "foo"], opts);
     });
     it("works with absolute paths for file and cwd", () => {
       const cwd = path.resolve("test");
       const file = path.resolve(cwd, "foo");
       const opts = { cwd };
       GitUtilities.addFile(file, opts);
-      expect(ChildProcessUtilities.execSync).lastCalledWith("git", ["add", "foo"], opts);
+      expect(ChildProcessUtilities.execSync).lastCalledWith("git", ["add", "--update", "foo"], opts);
     });
     it("uses a POSIX path in the Git command, given a Windows file path", () => {
       const opts = { cwd: "test" };
       GitUtilities.addFile("foo\\bar", opts);
-      expect(ChildProcessUtilities.execSync).lastCalledWith("git", ["add", "foo/bar"], opts);
+      expect(ChildProcessUtilities.execSync).lastCalledWith("git", ["add", "--update", "foo/bar"], opts);
     });
   });
 
